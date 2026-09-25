@@ -4,7 +4,6 @@ namespace App\Http\Controllers;
 
 use App\Models\Booking;
 use Illuminate\Http\Request;
-use Carbon\Carbon;
 
 class OperatorController extends Controller
 {
@@ -14,7 +13,7 @@ class OperatorController extends Controller
     public function today(Request $request)
     {
         $date = $request->query('date')
-            ? Carbon::parse($request->query('date'))
+            ? \Carbon\Carbon::parse($request->query('date'))
             : now();
 
         $bookings = Booking::with(['user', 'package'])
@@ -29,7 +28,7 @@ class OperatorController extends Controller
     }
 
     /**
-     * Tampilkan riwayat check-in.
+     * Tampilkan riwayat check-in (booking yang sudah pernah discan).
      */
     public function history(Request $request)
     {
@@ -38,7 +37,6 @@ class OperatorController extends Controller
 
         if ($request->filled('search')) {
             $search = $request->search;
-
             $query->where(function ($q) use ($search) {
                 $q->where('booking_code', 'like', "%{$search}%")
                     ->orWhereHas('user', function ($uq) use ($search) {
@@ -55,10 +53,7 @@ class OperatorController extends Controller
             $query->whereDate('checked_in_at', '<=', $request->to);
         }
 
-        $history = $query
-            ->orderByDesc('checked_in_at')
-            ->paginate(15)
-            ->withQueryString();
+        $history = $query->orderByDesc('checked_in_at')->paginate(15)->withQueryString();
 
         return view('operator.history', [
             'history' => $history,
@@ -66,7 +61,7 @@ class OperatorController extends Controller
     }
 
     /**
-     * Halaman scan voucher.
+     * Tampilkan halaman scan voucher.
      */
     public function scan()
     {
@@ -74,10 +69,8 @@ class OperatorController extends Controller
     }
 
     /**
-     * Verifikasi kode booking.
-     *
-     * Scan hanya mengambil data booking.
-     * Check-in dilakukan setelah operator menekan tombol konfirmasi.
+     * Verifikasi kode voucher hasil scan / input manual,
+     * lalu tandai booking sebagai checked-in.
      */
     public function verify(Request $request)
     {
@@ -85,37 +78,24 @@ class OperatorController extends Controller
             'booking_code' => 'required|string',
         ]);
 
-        $booking = Booking::with([
-            'user',
-            'package.destination',
-            'payment',
-            'checkedInBy',
-        ])
+        \Illuminate\Support\Facades\Log::info('OperatorController@verify dipanggil', [
+            'booking_code_diterima' => $request->booking_code,
+            'operator' => auth()->user()->name ?? 'unknown',
+        ]);
+
+        $booking = Booking::with(['user', 'package'])
             ->where('booking_code', trim($request->booking_code))
             ->first();
 
         if (!$booking) {
+            \Illuminate\Support\Facades\Log::warning('Booking tidak ditemukan', [
+                'booking_code_dicari' => trim($request->booking_code),
+            ]);
+
             return response()->json([
                 'success' => false,
                 'message' => 'Kode voucher tidak ditemukan.',
             ], 404);
-        }
-
-        if ($booking->is_checked_in) {
-            return response()->json([
-                'success' => false,
-                'already_checked_in' => true,
-                'message' => 'Voucher ini sudah pernah digunakan pada '
-                    . ($booking->checked_in_at
-                        ? $booking->checked_in_at->format('d M Y H:i')
-                        : '-')
-                    . '.',
-                'data' => [
-                    'booking_code' => $booking->booking_code,
-                    'nama' => $booking->user?->name ?? '-',
-                    'paket' => $booking->package?->name ?? '-',
-                ],
-            ], 422);
         }
 
         if ($booking->status !== 'Confirmed') {
@@ -125,91 +105,11 @@ class OperatorController extends Controller
             ], 422);
         }
 
-        return response()->json([
-            'success' => true,
-            'message' => 'Booking valid. Silakan periksa data sebelum melakukan check-in.',
-            'data' => [
-                // PEMESAN
-                'nama' => $booking->user?->name ?? '-',
-                'email' => $booking->user?->email ?? '-',
-                'phone' => $booking->phone_number ?? '-',
-
-                // BOOKING
-                'booking_code' => $booking->booking_code,
-                'booking_date' => $booking->booking_date
-                    ? $booking->booking_date->format('d M Y')
-                    : '-',
-                'jumlah_peserta' => $booking->total_people,
-                'catatan' => $booking->notes ?: '-',
-
-                // PAKET
-                'paket' => $booking->package?->name ?? '-',
-                'kategori' => $booking->package?->category ?? '-',
-                'durasi' => $booking->package?->duration_days
-                    ? $booking->package->duration_days . ' Hari'
-                    : '-',
-                'keberangkatan' => $booking->package?->departure_date
-                    ? $booking->package->departure_date->format('d M Y')
-                    : '-',
-                'harga_paket' => $booking->package?->price !== null
-                    ? 'Rp ' . number_format(
-                        (float) $booking->package->price,
-                        0,
-                        ',',
-                        '.'
-                    )
-                    : '-',
-
-                // PEMBAYARAN
-                'total_harga' => $booking->total_price !== null
-                    ? 'Rp ' . number_format(
-                        (float) $booking->total_price,
-                        0,
-                        ',',
-                        '.'
-                    )
-                    : '-',
-                'status_pembayaran' => $booking->payment?->status ?? '-',
-                'metode_pembayaran' => $booking->payment?->method ?? '-',
-
-                // STATUS
-                'status_booking' => $booking->status,
-            ],
-        ]);
-    }
-
-    /**
-     * Konfirmasi check-in setelah operator memeriksa data booking.
-     */
-    public function checkIn(Request $request)
-    {
-        $request->validate([
-            'booking_code' => 'required|string',
-        ]);
-
-        $booking = Booking::where(
-            'booking_code',
-            trim($request->booking_code)
-        )->first();
-
-        if (!$booking) {
-            return response()->json([
-                'success' => false,
-                'message' => 'Kode booking tidak ditemukan.',
-            ], 404);
-        }
-
         if ($booking->is_checked_in) {
             return response()->json([
                 'success' => false,
-                'message' => 'Booking ini sudah pernah check-in.',
-            ], 422);
-        }
-
-        if ($booking->status !== 'Confirmed') {
-            return response()->json([
-                'success' => false,
-                'message' => "Booking berstatus \"{$booking->status}\" — tidak dapat check-in.",
+                'message' => 'Voucher ini sudah pernah digunakan pada '
+                    . $booking->checked_in_at->format('d M Y H:i') . '.',
             ], 422);
         }
 
@@ -219,13 +119,22 @@ class OperatorController extends Controller
             'checked_in_by' => auth()->id(),
         ]);
 
+        \Illuminate\Support\Facades\Log::info('Check-in berhasil disimpan', [
+            'booking_id' => $booking->id,
+            'booking_code' => $booking->booking_code,
+            'is_checked_in_setelah_update' => $booking->fresh()->is_checked_in,
+        ]);
+
         return response()->json([
             'success' => true,
-            'message' => 'Check-in berhasil! Booking telah berhasil diverifikasi.',
+            'message' => 'Check-in berhasil!',
             'data' => [
-                'booking_code' => $booking->booking_code,
-                'checked_in_at' => $booking->checked_in_at
-                    ->format('d M Y H:i'),
+                'booking_code'   => $booking->booking_code,
+                'nama'           => $booking->user->name,
+                'no_hp'          => $booking->phone_number,
+                'paket'          => $booking->package->name,
+                'tanggal'        => $booking->booking_date->format('d M Y'),
+                'jumlah_peserta' => $booking->total_people,
             ],
         ]);
     }

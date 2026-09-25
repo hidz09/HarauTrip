@@ -222,6 +222,106 @@
     .scan-again-btn:hover {
         background: #eee9df;
     }
+
+    /* TOAST "MEMVERIFIKASI..." */
+    .verify-toast {
+        position: fixed;
+        top: 24px;
+        left: 50%;
+        transform: translateX(-50%) translateY(-20px);
+        background: #102c22;
+        color: #ffffff;
+        padding: 13px 22px;
+        border-radius: 999px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+        font-weight: 600;
+        box-shadow: 0 10px 30px rgba(16, 44, 34, 0.25);
+        z-index: 999;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s ease, transform 0.2s ease;
+    }
+
+    .verify-toast.show {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+
+    .verify-toast .spinner {
+        width: 15px;
+        height: 15px;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-top-color: #d6ad73;
+        border-radius: 50%;
+        animation: verify-spin 0.7s linear infinite;
+        flex-shrink: 0;
+    }
+
+    @keyframes verify-spin {
+        to { transform: rotate(360deg); }
+    }
+
+    /* TOAST SUKSES: nampilin nama pemesan */
+    .name-toast {
+        position: fixed;
+        top: 24px;
+        left: 50%;
+        transform: translateX(-50%) translateY(-20px);
+        background: #1b7a3d;
+        color: #ffffff;
+        padding: 14px 24px;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        box-shadow: 0 10px 30px rgba(27, 122, 61, 0.3);
+        z-index: 999;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s ease, transform 0.25s ease;
+        max-width: 90vw;
+    }
+
+    .name-toast.show {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+    }
+
+    .name-toast .name-toast-icon {
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.15);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-size: 16px;
+    }
+
+    .name-toast .name-toast-text {
+        line-height: 1.3;
+    }
+
+    .name-toast .name-toast-label {
+        font-size: 10.5px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.4px;
+        opacity: 0.8;
+    }
+
+    .name-toast .name-toast-name {
+        font-size: 15px;
+        font-weight: 700;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 60vw;
+    }
 </style>
 
 <div class="scan-page">
@@ -276,6 +376,23 @@
 
         </div>
 
+    </div>
+
+    {{-- TOAST: muncul sesaat setelah QR terdeteksi, sebelum hasil dari server balik --}}
+    <div class="verify-toast" id="verifyToast">
+        <span class="spinner"></span>
+        <span>Kode terdeteksi, memverifikasi...</span>
+    </div>
+
+    {{-- TOAST: nama pemesan, muncul begitu check-in berhasil --}}
+    <div class="name-toast" id="nameToast">
+        <div class="name-toast-icon">
+            <i class="fas fa-check"></i>
+        </div>
+        <div class="name-toast-text">
+            <div class="name-toast-label">Check-in Berhasil</div>
+            <div class="name-toast-name" id="nameToastValue"></div>
+        </div>
     </div>
 
 </div>
@@ -354,9 +471,24 @@ function submitManual(e) {
     return false;
 }
 
+function showVerifyToast() {
+    document.getElementById('verifyToast').classList.add('show');
+}
+
+function hideVerifyToast() {
+    document.getElementById('verifyToast').classList.remove('show');
+}
+
 function verifyCode(code) {
-    if (isProcessing) return;
+    console.log('[SCAN DEBUG] Kode terdeteksi:', code, '| isProcessing:', isProcessing);
+
+    if (isProcessing) {
+        console.log('[SCAN DEBUG] Diabaikan karena masih memproses request sebelumnya.');
+        return;
+    }
     isProcessing = true;
+
+    showVerifyToast();
 
     fetch(verifyUrl, {
         method: 'POST',
@@ -367,16 +499,37 @@ function verifyCode(code) {
         },
         body: JSON.stringify({ booking_code: code }),
     })
-    .then(res => res.json().then(data => ({ status: res.status, body: data })))
+    .then(res => {
+        console.log('[SCAN DEBUG] HTTP status dari server:', res.status);
+        return res.json().then(data => ({ status: res.status, body: data }));
+    })
     .then(({ body }) => {
+        console.log('[SCAN DEBUG] Response JSON dari server:', body);
+        hideVerifyToast();
         showResult(body);
     })
-    .catch(() => {
+    .catch((err) => {
+        console.error('[SCAN DEBUG] Fetch gagal / response bukan JSON valid:', err);
+        hideVerifyToast();
         showResult({ success: false, message: 'Terjadi kesalahan koneksi. Coba lagi.' });
     })
     .finally(() => {
         isProcessing = false;
     });
+}
+
+let nameToastTimer = null;
+
+function showNameToast(nama) {
+    const toast = document.getElementById('nameToast');
+    document.getElementById('nameToastValue').textContent = nama || '-';
+
+    toast.classList.add('show');
+
+    clearTimeout(nameToastTimer);
+    nameToastTimer = setTimeout(() => {
+        toast.classList.remove('show');
+    }, 4000);
 }
 
 function showResult(res) {
@@ -405,6 +558,8 @@ function showResult(res) {
         Object.entries(rows).forEach(([label, value]) => {
             detail.innerHTML += `<div><span>${label}</span><span>${value}</span></div>`;
         });
+
+        showNameToast(res.data.nama);
     } else {
         detail.style.display = 'none';
     }
